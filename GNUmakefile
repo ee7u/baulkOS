@@ -69,12 +69,7 @@ run: $(IMAGE_NAME).iso
 limine/limine:
 	rm -rf limine
 	git clone https://codeberg.org/Limine/Limine.git limine --branch=v10.x-binary --depth=1
-	$(MAKE) -C limine \
-		CC="$(CC)" \
-		CFLAGS="$(CFLAGS)" \
-		CPPFLAGS="$(CPPFLAGS)" \
-		LDFLAGS="$(LDFLAGS)" \
-		LIBS="$(LIBS)"
+	$(MAKE) -C limine
 
 $(IMAGE_NAME).iso: limine/limine bin/$(OUTPUT)
 	mkdir -p iso_root
