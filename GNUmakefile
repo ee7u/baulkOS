@@ -64,7 +64,7 @@ all: $(IMAGE_NAME).iso
 
 .PHONY: run
 run: $(IMAGE_NAME).iso
-	qemu-system-x86_64 -M q35 -cdrom $(IMAGE_NAME).iso -boot d -m 2G
+	qemu-system-x86_64 -M q35 -cdrom $(IMAGE_NAME).iso -boot d -m 4G
 
 limine/limine:
 	rm -rf limine
