@@ -1,5 +1,6 @@
 global setGdt
 global reloadSegments
+global setTSS
 
 section .data
 gdtr dw 0 ; limit
@@ -25,4 +26,9 @@ reloadSegments:
     push rax
     retfq
 .flush:
+    ret
+
+setTSS:
+    mov ax, 0x28
+    ltr ax
     ret

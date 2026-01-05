@@ -301,50 +301,6 @@ void print_err(String8 str) {
     print_color(str, RED);
 }
 
-// Some of this stuff is from the tutorial on osdev wiki
-// Each define here is for a specific flag in the descriptor.
-// Refer to the intel documentation for a description of what each one does.
-#define SEG_DESCTYPE(x)  ((x) << 0x04) // Descriptor type (0 for system, 1 for code/data)
-#define SEG_PRES(x)      ((x) << 0x07) // Present
-#define SEG_SAVL(x)      ((x) << 0x0C) // Available for system use
-#define SEG_LONG(x)      ((x) << 0x0D) // Long mode
-#define SEG_SIZE(x)      ((x) << 0x0E) // Size (0 for 16-bit, 1 for 32)
-#define SEG_GRAN(x)      ((x) << 0x0F) // Granularity (0 for 1B - 1MB, 1 for 4KB - 4GB)
-#define SEG_PRIV(x)     (((x) &  0x03) << 0x05)   // Set privilege level (0 - 3)
-
-#define SEG_DATA_RD        0x00 // Read-Only
-#define SEG_DATA_RDA       0x01 // Read-Only, accessed
-#define SEG_DATA_RDWR      0x02 // Read/Write
-#define SEG_DATA_RDWRA     0x03 // Read/Write, accessed
-#define SEG_DATA_RDEXPD    0x04 // Read-Only, expand-down
-#define SEG_DATA_RDEXPDA   0x05 // Read-Only, expand-down, accessed
-#define SEG_DATA_RDWREXPD  0x06 // Read/Write, expand-down
-#define SEG_DATA_RDWREXPDA 0x07 // Read/Write, expand-down, accessed
-#define SEG_CODE_EX        0x08 // Execute-Only
-#define SEG_CODE_EXA       0x09 // Execute-Only, accessed
-#define SEG_CODE_EXRD      0x0A // Execute/Read
-#define SEG_CODE_EXRDA     0x0B // Execute/Read, accessed
-#define SEG_CODE_EXC       0x0C // Execute-Only, conforming
-#define SEG_CODE_EXCA      0x0D // Execute-Only, conforming, accessed
-#define SEG_CODE_EXRDC     0x0E // Execute/Read, conforming
-#define SEG_CODE_EXRDCA    0x0F // Execute/Read, conforming, accessed
-
-#define GDT_CODE_PL0 SEG_DESCTYPE(1) | SEG_PRES(1) | SEG_SAVL(0) | \
-                     SEG_LONG(1)     | SEG_SIZE(0) | SEG_GRAN(1) | \
-                     SEG_PRIV(0)     | SEG_CODE_EXRD
-
-#define GDT_DATA_PL0 SEG_DESCTYPE(1) | SEG_PRES(1) | SEG_SAVL(0) | \
-                     SEG_LONG(1)     | SEG_SIZE(1) | SEG_GRAN(1) | \
-                     SEG_PRIV(0)     | SEG_DATA_RDWR
-
-#define GDT_CODE_PL3 SEG_DESCTYPE(1) | SEG_PRES(1) | SEG_SAVL(0) | \
-                     SEG_LONG(1)     | SEG_SIZE(0) | SEG_GRAN(1) | \
-                     SEG_PRIV(3)     | SEG_CODE_EXRD
-
-#define GDT_DATA_PL3 SEG_DESCTYPE(1) | SEG_PRES(1) | SEG_SAVL(0) | \
-                     SEG_LONG(1)     | SEG_SIZE(1) | SEG_GRAN(1) | \
-                     SEG_PRIV(3)     | SEG_DATA_RDWR
-
 u64 create_descriptor(uint32_t base, uint32_t limit, uint16_t flag)
 {
     u64 descriptor;
@@ -362,8 +318,104 @@ u64 create_descriptor(uint32_t base, uint32_t limit, uint16_t flag)
     return descriptor;
 }
 
+void create_tss_descriptor(u64* gdt, u64 base, u64 limit, u16 flag) {
+    gdt[0] = limit & 0x00F0000;
+    gdt[0] |= (flag << 8) & 0x00F0FF00;
+    gdt[0] |= (base >> 16) & 0x000000FF;
+    gdt[0] |= base & 0xFF000000;
+
+    gdt[0] <<= 32;
+
+    gdt[0] |= (base << 16) & 0xFFFF0000;
+    gdt[0] |= limit & 0x0000FFFF;
+
+    gdt[1] = base >> 32;
+}
+
 extern void setGdt(u16 limit, u64 base);
 extern void reloadSegments();
+extern void setTSS();
+
+// from https://forum.osdev.org/viewtopic.php?t=13678
+// there seems to be differing terminology for the fields here
+typedef volatile struct TSS {
+    u16 link;
+    u16 link_h;
+
+    u32 esp0;
+    u16 ss0;
+    u16 ss0_h;
+
+    u32 esp1;
+    u16 ss1;
+    u16 ss1_h;
+
+    u32 esp2;
+    u16 ss2;
+    u16 ss2_h;
+
+    u32 cr3;
+    u32 eip;
+    u32 eflags;
+
+    u32 eax;
+    u32 ecx;
+    u32 edx;
+    u32 ebx;
+
+    u32 esp;
+    u32 ebp;
+
+    u32 esi;
+    u32 edi;
+
+    u16 es;
+    u16 es_h;
+
+    u16 cs;
+    u16 cs_h;
+
+    u16 ss;
+    u16 ss_h;
+
+    u16 ds;
+    u16 ds_h;
+
+    u16 fs;
+    u16 fs_h;
+
+    u16 gs;
+    u16 gs_h;
+
+    u16 ldt;
+    u16 ldt_h;
+
+    u16 trap;
+    u16 iomap;
+} TSS;
+
+static u64 gdt[7];
+
+void load_gdt() {
+    // need to disable interrupts when setting gdt
+    asm("cli");
+
+    // TODO: where should we put the gdt?
+    gdt[0] = create_descriptor(0, 0, 0);
+    gdt[1] = create_descriptor(0, 0x000FFFFF, 0xA09A);
+    gdt[2] = create_descriptor(0, 0x000FFFFF, 0xC092);
+    gdt[3] = create_descriptor(0, 0x000FFFFF, 0xC0F2);
+    gdt[4] = create_descriptor(0, 0x000FFFFF, 0xA0FA);
+
+    // TODO: what should esp0 be? This will be the value of the stack pointer when switching to ring0
+    TSS tss = {.ss0 = 0x10, .esp0 = 0, .iomap = sizeof(TSS)};
+    create_tss_descriptor(gdt + 5, (u64)&tss, sizeof(tss)-1, 0x4089);
+
+    setGdt(7*8, (u64)gdt);
+    reloadSegments();
+    asm("sti");
+    setTSS();
+}
 
 void kmain(void) {
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
@@ -414,18 +466,7 @@ void kmain(void) {
         print(str8_lit("\n"));
     }
 
-    asm("cli");
-    // TODO: where should we put the gdt?
-    u64 gdt[6];
-    gdt[0] = create_descriptor(0, 0, 0);
-    gdt[1] = create_descriptor(0, 0x000FFFFF, (GDT_CODE_PL0));
-    gdt[2] = create_descriptor(0, 0x000FFFFF, (GDT_DATA_PL0));
-    gdt[3] = create_descriptor(0, 0x000FFFFF, (GDT_CODE_PL3));
-    gdt[4] = create_descriptor(0, 0x000FFFFF, (GDT_DATA_PL3));
-    //TODO: Task state segment
-    setGdt(5*8, (u64)gdt);
-    reloadSegments();
-    asm("sti");
+    load_gdt();
 
     hcf();
 }
