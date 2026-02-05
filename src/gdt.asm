@@ -1,10 +1,14 @@
 global setGdt
 global reloadSegments
 global setTSS
+global setIdt
 
 section .data
 gdtr dw 0 ; limit
-     dw 0 ; base
+     dq 0 ; base
+
+idtr dw 0 ; size
+     dq 0 ; base
 
 section .text
 
@@ -31,4 +35,10 @@ reloadSegments:
 setTSS:
     mov ax, 0x28
     ltr ax
+    ret
+
+setIdt:
+    mov [idtr], di
+    mov [idtr+2], rsi
+    lidt [idtr]
     ret

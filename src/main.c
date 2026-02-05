@@ -335,6 +335,7 @@ void create_tss_descriptor(u64* gdt, u64 base, u64 limit, u16 flag) {
 extern void setGdt(u16 limit, u64 base);
 extern void reloadSegments();
 extern void setTSS();
+extern void setIdt(u16 size, u64 base);
 
 // from https://forum.osdev.org/viewtopic.php?t=13678
 // there seems to be differing terminology for the fields here
@@ -396,6 +397,27 @@ typedef volatile struct TSS {
 
 static u64 gdt[7];
 
+typedef struct InterruptDescriptor {
+    u16 offset1;
+    u16 selector;
+    u8 ist;
+    u8 type_attributes;
+    u16 offset2;
+    u32 offset3;
+    u32 reserved;
+} InterruptDescriptor;
+
+static InterruptDescriptor idt[256];
+
+#define INTERRUPT_GATE 0x8E
+#define TRAP_GATE 0x8F
+
+struct interrupt_frame;
+__attribute__((interrupt)) void interrupt_handler(struct interrupt_frame* frame) {
+    // TODO: Interrupt service routine should only call a function with attribute 'no_caller_saved_registers' or be compiled with '-mgeneral-regs-only'
+    print_err(str8_lit("Interrupt\n"));
+}
+
 void load_gdt() {
     // need to disable interrupts when setting gdt
     asm("cli");
@@ -416,6 +438,8 @@ void load_gdt() {
     asm("sti");
     setTSS();
 }
+
+static InterruptDescriptor int3_desc;
 
 void kmain(void) {
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
@@ -467,6 +491,20 @@ void kmain(void) {
     }
 
     load_gdt();
+
+    u64 handler_addr = (u64)interrupt_handler;
+    int3_desc.offset1 = (u16)(handler_addr & 0xFFFF);
+    int3_desc.selector = 0x08;
+    int3_desc.ist = 0;
+    int3_desc.type_attributes = TRAP_GATE;
+    int3_desc.offset2 = (u16)((handler_addr >> 16) & 0xFFFF);
+    int3_desc.offset3 = (u32)(handler_addr >> 32);
+    idt[3] = int3_desc;
+    setIdt(256*sizeof(InterruptDescriptor)-1, (u64)idt);
+
+    asm("int3");
+
+    print(str8_lit("Still works\n"));
 
     hcf();
 }
