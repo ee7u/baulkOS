@@ -564,7 +564,9 @@ __attribute__((interrupt)) void interrupt_handler(struct interrupt_frame* frame)
 
 u64 ticks = 0;
 __attribute__((interrupt)) void timer_interrupt_handler(struct interrupt_frame* frame) {
-    ticks++;
+    if (ticks > 0) {
+        ticks--;
+    }
     PIC_sendEOI(0);
 }
 
@@ -574,6 +576,20 @@ __attribute__((interrupt)) void kb_interrupt_handler(struct interrupt_frame* fra
     print_err(u64_to_str8_hex(code, print_buffer, 128));
     print_err(str8_lit("\n"));
     PIC_sendEOI(1);
+}
+
+void set_PIT_frequency() {
+    outb(0x43, 0x36); // select PIT channel 0
+    u16 divisor = 1193; // 1000Hz
+    outb(0x40, divisor & 0xFF);
+    outb(0x40, divisor>>8);
+}
+
+void sleep(u64 millis) {
+    ticks = millis;
+    while (ticks > 0) {
+        asm("hlt");
+    }
 }
 
 void kmain(void) {
@@ -661,6 +677,8 @@ void kmain(void) {
     for (u64 i = 2; i < 16; i++) {
         IRQ_set_mask(i);
     }
+
+    set_PIT_frequency();
 
     hcf();
 }
