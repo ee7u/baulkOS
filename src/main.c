@@ -413,10 +413,6 @@ static InterruptDescriptor idt[256];
 #define TRAP_GATE 0x8F
 
 struct interrupt_frame;
-__attribute__((interrupt)) void interrupt_handler(struct interrupt_frame* frame) {
-    // TODO: Interrupt service routine should only call a function with attribute 'no_caller_saved_registers' or be compiled with '-mgeneral-regs-only'
-    print_err(str8_lit("Interrupt\n"));
-}
 
 void load_gdt() {
     // need to disable interrupts when setting gdt
@@ -439,7 +435,146 @@ void load_gdt() {
     setTSS();
 }
 
-static InterruptDescriptor int3_desc;
+static InterruptDescriptor default_desc;
+static InterruptDescriptor timer_desc;
+static InterruptDescriptor kb_desc;
+
+static inline void outb(u16 port, u8 val)
+{
+    __asm__ volatile ( "outb %b0, %w1" : : "a"(val), "Nd"(port) : "memory");
+    /* There's an outb %al, $imm8 encoding, for compile-time constant port numbers that fit in 8b. (N constraint).
+     * Wider immediate constants would be truncated at assemble-time (e.g. "i" constraint).
+     * The  outb  %al, %dx  encoding is the only option for all other cases.
+     * %1 expands to %dx because  port  is a uint16_t.  %w1 could be used if we had the port number a wider C type */
+}
+
+static inline u8 inb(u16 port)
+{
+    uint8_t ret;
+    __asm__ volatile ( "inb %w1, %b0"
+                   : "=a"(ret)
+                   : "Nd"(port)
+                   : "memory");
+    return ret;
+}
+
+#define PIC1 0x20 // address for master PIC
+#define PIC2 0x28 // address for slave PIC
+#define PIC2_DEFAULT 0xA0 // slave PIC address before remapping
+#define PIC1_COMMAND PIC1
+#define PIC1_DATA (PIC1+1)
+#define PIC2_COMMAND PIC2
+#define PIC2_DATA (PIC2+1)
+
+#define PIC_EOI	0x20 // End-of-interrupt command code
+
+void PIC_sendEOI(u8 irq)
+{
+	if(irq >= 8)
+		outb(PIC2_COMMAND,PIC_EOI);
+
+	outb(PIC1_COMMAND,PIC_EOI);
+}
+
+#define ICW1_ICW4 0x01 // Indicates that ICW4 will be present
+#define ICW1_INIT 0x10
+#define ICW4_8086 0x01 // 8086/88  mode
+#define CASCADE_IRQ 2
+
+void PIC_remap(i32 offset1, i32 offset2)
+{
+	outb(PIC1_COMMAND, ICW1_INIT | ICW1_ICW4);
+	outb(PIC2_DEFAULT, ICW1_INIT | ICW1_ICW4);
+	outb(PIC1_DATA, offset1);
+	outb(PIC2_DEFAULT+1, offset2);
+	outb(PIC1_DATA, 1 << CASCADE_IRQ); // ICW3: tell Master PIC that there is a slave PIC at IRQ2
+	outb(PIC2_DATA, 2); // ICW3: tell Slave PIC its cascade identity (0000 0010)
+	outb(PIC1_DATA, ICW4_8086); // ICW4: have the PICs use 8086 mode (and not 8080 mode)
+	outb(PIC2_DATA, ICW4_8086);
+
+	// Unmask both PICs.
+	outb(PIC1_DATA, 0);
+	outb(PIC2_DATA, 0);
+}
+
+void IRQ_set_mask(u8 line) {
+    u16 port;
+    u8 value;
+
+    if (line < 8) {
+        port = PIC1_DATA;
+    } else {
+        port = PIC2_DATA;
+        line -= 8;
+    }
+    value = inb(port) | (1 << line);
+    outb(port, value);
+}
+
+void IRQ_clear_mask(u8 line) {
+    u16 port;
+    u8 value;
+
+    if (line < 8) {
+        port = PIC1_DATA;
+    } else {
+        port = PIC2_DATA;
+        line -= 8;
+    }
+    value = inb(port) & ~(1 << line);
+    outb(port, value);
+}
+
+#define PIC_READ_IRR 0x0a
+#define PIC_READ_ISR 0x0b
+
+u16 pic_get_irq_reg(i32 ocw3)
+{
+    /* OCW3 to PIC CMD to get the register values.  PIC2 is chained, and
+     * represents IRQs 8-15.  PIC1 is IRQs 0-7, with 2 being the chain */
+    outb(PIC1_COMMAND, ocw3);
+    outb(PIC2_COMMAND, ocw3);
+    return (inb(PIC2_COMMAND) << 8) | inb(PIC1_COMMAND);
+}
+
+u16 pic_get_irr(void)
+{
+    return pic_get_irq_reg(PIC_READ_IRR);
+}
+
+u16 pic_get_isr(void)
+{
+    return pic_get_irq_reg(PIC_READ_ISR);
+}
+
+u8 print_buffer[128];
+__attribute__((interrupt)) void interrupt_handler(struct interrupt_frame* frame) {
+    // TODO: Interrupt service routine should only call a function with attribute 'no_caller_saved_registers' or be compiled with '-mgeneral-regs-only'
+    u16 irr = pic_get_irr();
+    u16 isr = pic_get_isr();
+
+    print_err(str8_lit("Interrupt\n  irr: "));
+    print_err(u64_to_str8_hex(irr, print_buffer, 128));
+    print_err(str8_lit("\n  isr: "));
+    print_err(u64_to_str8_hex(isr, print_buffer, 128));
+    print_err(str8_lit("\n"));
+
+    PIC_sendEOI(0);
+}
+
+u64 ticks = 0;
+__attribute__((interrupt)) void timer_interrupt_handler(struct interrupt_frame* frame) {
+    ticks++;
+    PIC_sendEOI(0);
+}
+
+__attribute__((interrupt)) void kb_interrupt_handler(struct interrupt_frame* frame) {
+    u8 code = inb(0x60);
+    print_err(str8_lit("Keyboard: "));
+    print_err(u64_to_str8_hex(code, print_buffer, 128));
+    print_err(str8_lit("\n"));
+    PIC_sendEOI(1);
+}
 
 void kmain(void) {
     if (LIMINE_BASE_REVISION_SUPPORTED(limine_base_revision) == false) {
@@ -479,32 +614,53 @@ void kmain(void) {
     u64 memmap_entry_count = memmap_request.response->entry_count;
     struct limine_memmap_entry** memmap_entries = memmap_request.response->entries;
 
-    u8 buffer[128];
     for (u64 i = 0; i < memmap_entry_count; i++) {
         print(str8_lit("memmap entry: base="));
-        print(u64_to_str8_hex(memmap_entries[i]->base, buffer, 128));
+        print(u64_to_str8_hex(memmap_entries[i]->base, print_buffer, 128));
         print(str8_lit(" length="));
-        print(u64_to_str8_hex(memmap_entries[i]->length, buffer, 128));
+        print(u64_to_str8_hex(memmap_entries[i]->length, print_buffer, 128));
         print(str8_lit(" type="));
-        print(u64_to_str8_hex(memmap_entries[i]->type, buffer, 128));
+        print(u64_to_str8_hex(memmap_entries[i]->type, print_buffer, 128));
         print(str8_lit("\n"));
     }
 
     load_gdt();
 
-    u64 handler_addr = (u64)interrupt_handler;
-    int3_desc.offset1 = (u16)(handler_addr & 0xFFFF);
-    int3_desc.selector = 0x08;
-    int3_desc.ist = 0;
-    int3_desc.type_attributes = TRAP_GATE;
-    int3_desc.offset2 = (u16)((handler_addr >> 16) & 0xFFFF);
-    int3_desc.offset3 = (u32)(handler_addr >> 32);
-    idt[3] = int3_desc;
     setIdt(256*sizeof(InterruptDescriptor)-1, (u64)idt);
 
-    asm("int3");
+    u64 handler_addr = (u64)interrupt_handler;
+    default_desc.offset1 = (u16)(handler_addr & 0xFFFF);
+    default_desc.selector = 0x08;
+    default_desc.ist = 0;
+    default_desc.type_attributes = TRAP_GATE;
+    default_desc.offset2 = (u16)((handler_addr >> 16) & 0xFFFF);
+    default_desc.offset3 = (u32)(handler_addr >> 32);
+    for (u64 i = 0; i < 256; i++) {
+        idt[i] = default_desc;
+    }
 
-    print(str8_lit("Still works\n"));
+    u64 timer_handler_addr = (u64)timer_interrupt_handler;
+    timer_desc.offset1 = (u16)(timer_handler_addr & 0xFFFF);
+    timer_desc.selector = 0x08;
+    timer_desc.ist = 0;
+    timer_desc.type_attributes = INTERRUPT_GATE;
+    timer_desc.offset2 = (u16)((timer_handler_addr >> 16) & 0xFFFF);
+    timer_desc.offset3 = (u32)(timer_handler_addr >> 32);
+    idt[PIC1] = timer_desc;
+
+    u64 kb_handler_addr = (u64)kb_interrupt_handler;
+    kb_desc.offset1 = (u16)(kb_handler_addr & 0xFFFF);
+    kb_desc.selector = 0x08;
+    kb_desc.ist = 0;
+    kb_desc.type_attributes = INTERRUPT_GATE;
+    kb_desc.offset2 = (u16)((kb_handler_addr >> 16) & 0xFFFF);
+    kb_desc.offset3 = (u32)(kb_handler_addr >> 32);
+    idt[PIC1+1] = kb_desc;
+
+    PIC_remap(PIC1, PIC2);
+    for (u64 i = 2; i < 16; i++) {
+        IRQ_set_mask(i);
+    }
 
     hcf();
 }
