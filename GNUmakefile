@@ -75,7 +75,7 @@ $(IMAGE_NAME).iso: limine/limine bin/$(OUTPUT)
 	mkdir -p iso_root
 	mkdir -p iso_root/boot
 	cp -v bin/baulkOS iso_root/boot/
-	cp -v zap-light16.psf iso_root/boot/
+	cp -v Lat38-VGA16.psf iso_root/boot/
 	mkdir -p iso_root/boot/limine
 	cp -v limine.conf limine/limine-bios.sys limine/limine-bios-cd.bin \
 	      limine/limine-uefi-cd.bin iso_root/boot/limine/
