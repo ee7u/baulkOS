@@ -23,15 +23,20 @@ String8 u64_to_str8(u64 x, u8* buffer, u64 bufferSize) {
 
 String8 u64_to_str8_hex(u64 x, u8* buffer, u64 bufferSize) {
     u64 i = 0;
-    while (x != 0) {
-        u8 digit = x % 16;
-        if (digit < 10) {
-            buffer[bufferSize - i - 1] = '0' + digit;
-        } else {
-            buffer[bufferSize - i - 1] = 'a' + digit - 10;
-        }
+    if (x == 0) {
+        buffer[bufferSize - 1] = '0';
         i++;
-        x /= 16;
+    } else {
+        while (x != 0) {
+            u8 digit = x % 16;
+            if (digit < 10) {
+                buffer[bufferSize - i - 1] = '0' + digit;
+            } else {
+                buffer[bufferSize - i - 1] = 'a' + digit - 10;
+            }
+            i++;
+            x /= 16;
+        }
     }
     buffer[bufferSize - i - 1] = 'x';
     buffer[bufferSize - i - 2] = '0';
